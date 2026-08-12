@@ -32,19 +32,37 @@ def render_dashboard(db):
         selected_section_id = sec_options[chosen_sec]
 
     # --- 2. CALCULATE HIGH-LEVEL METRICS ---
-    rel_query = db.query(func.coalesce(func.sum(FundRelease.amount), 0.0))
-    exp_query = db.query(func.coalesce(func.sum(Expenditure.amount), 0.0))
+    budget_heads = db.query(BudgetHead).all()
 
     if selected_section_id:
-        rel_query = rel_query.filter(
-            FundRelease.section_id == selected_section_id
+        target_heads = [
+            h for h in budget_heads 
+            if any(s.id == selected_section_id for s in h.sections)
+        ]
+        total_released = 0.0
+        total_spent = 0.0
+        for head in target_heads:
+            h_rel = (
+                db.query(func.coalesce(func.sum(FundRelease.amount), 0.0))
+                .filter(FundRelease.budget_head_id == head.id)
+                .scalar()
+            )
+            h_exp = (
+                db.query(func.coalesce(func.sum(Expenditure.amount), 0.0))
+                .filter(Expenditure.budget_head_id == head.id)
+                .scalar()
+            )
+            total_released += h_rel
+            total_spent += h_exp
+    else:
+        target_heads = budget_heads
+        total_released = (
+            db.query(func.coalesce(func.sum(FundRelease.amount), 0.0)).scalar()
         )
-        exp_query = exp_query.filter(
-            Expenditure.section_id == selected_section_id
+        total_spent = (
+            db.query(func.coalesce(func.sum(Expenditure.amount), 0.0)).scalar()
         )
 
-    total_released = rel_query.scalar()
-    total_spent = exp_query.scalar()
     remaining_balance = total_released - total_spent
 
     # Calculate utilization percentage
@@ -79,33 +97,23 @@ def render_dashboard(db):
     # --- 4. BREAKDOWN BY BUDGET HEAD TABLE ---
     st.markdown("##### 📌 Budget Head Summary Breakdown")
 
-    budget_heads = db.query(BudgetHead).all()
     breakdown_data = []
 
-    for head in budget_heads:
-        # Calculate released for head
-        rel_head_q = db.query(
+    for head in target_heads:
+        # Calculate shared released for head across all releases
+        h_released = db.query(
             func.coalesce(func.sum(FundRelease.amount), 0.0)
-        ).filter(FundRelease.budget_head_id == head.id)
-        # Calculate spent for head
-        exp_head_q = db.query(
+        ).filter(FundRelease.budget_head_id == head.id).scalar()
+
+        # Calculate shared spent for head across all assigned expenditures
+        h_spent = db.query(
             func.coalesce(func.sum(Expenditure.amount), 0.0)
-        ).filter(Expenditure.budget_head_id == head.id)
+        ).filter(Expenditure.budget_head_id == head.id).scalar()
 
-        if selected_section_id:
-            rel_head_q = rel_head_q.filter(
-                FundRelease.section_id == selected_section_id
-            )
-            exp_head_q = exp_head_q.filter(
-                Expenditure.section_id == selected_section_id
-            )
-
-        h_released = rel_head_q.scalar()
-        h_spent = exp_head_q.scalar()
         h_balance = h_released - h_spent
 
-        # Only list heads that have had releases or expenditures
-        if h_released > 0 or h_spent > 0:
+        # List heads with allocations or assigned to the section
+        if h_released > 0 or h_spent > 0 or selected_section_id:
             breakdown_data.append(
                 {
                     "Head Code": head.code,

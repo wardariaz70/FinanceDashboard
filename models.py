@@ -1,7 +1,16 @@
 from datetime import date
-from sqlalchemy import Column, Date, Float, ForeignKey, Integer, String
+from sqlalchemy import Column, Date, Float, ForeignKey, Integer, String, Table
 from sqlalchemy.orm import relationship
 from database import Base, engine
+
+
+# Association Table for Many-to-Many relationship between BudgetHead and Section
+budget_head_sections = Table(
+    "budget_head_sections",
+    Base.metadata,
+    Column("budget_head_id", Integer, ForeignKey("budget_heads.id"), primary_key=True),
+    Column("section_id", Integer, ForeignKey("sections.id"), primary_key=True),
+)
 
 
 # 1. Users Table
@@ -31,6 +40,9 @@ class Section(Base):
     users = relationship("User", back_populates="section")
     releases = relationship("FundRelease", back_populates="section")
     expenditures = relationship("Expenditure", back_populates="section")
+    budget_heads = relationship(
+        "BudgetHead", secondary=budget_head_sections, back_populates="sections"
+    )
 
 
 # 3. Budget Heads Table
@@ -43,6 +55,9 @@ class BudgetHead(Base):
 
     releases = relationship("FundRelease", back_populates="budget_head")
     expenditures = relationship("Expenditure", back_populates="budget_head")
+    sections = relationship(
+        "Section", secondary=budget_head_sections, back_populates="budget_heads"
+    )
 
 
 # 4. Fund Release Table

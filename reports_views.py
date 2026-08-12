@@ -42,7 +42,11 @@ def render_reports(db):
     with col2:
         # Budget Head Filter
         head_options = {"All Budget Heads": None}
-        for h in budget_heads:
+        filtered_heads = [
+            h for h in budget_heads
+            if not sec_filter or any(s.id == sec_filter for s in h.sections)
+        ]
+        for h in filtered_heads:
             head_options[f"{h.code} - {h.description}"] = h.id
         selected_head_label = st.selectbox(
             "Filter by Budget Head", list(head_options.keys())
@@ -166,37 +170,30 @@ def render_reports(db):
         )
 
         for sec in target_sections:
-            for head in target_heads:
-                # Sum Released
-                rel_sum = (
-                    db.query(FundRelease)
-                    .filter(
-                        FundRelease.section_id == sec.id,
-                        FundRelease.budget_head_id == head.id,
-                    )
-                    .all()
+            sec_heads = [h for h in target_heads if any(s.id == sec.id for s in h.sections)]
+            for head in sec_heads:
+                # Sum Released for head (shared pool)
+                total_rel = (
+                    db.query(func.coalesce(func.sum(FundRelease.amount), 0.0))
+                    .filter(FundRelease.budget_head_id == head.id)
+                    .scalar()
                 )
-                total_rel = sum(r.amount for r in rel_sum)
 
-                # Sum Spent
-                exp_sum = (
-                    db.query(Expenditure)
-                    .filter(
-                        Expenditure.section_id == sec.id,
-                        Expenditure.budget_head_id == head.id,
-                    )
-                    .all()
+                # Sum Spent for head across all assigned expenditures
+                total_spent = (
+                    db.query(func.coalesce(func.sum(Expenditure.amount), 0.0))
+                    .filter(Expenditure.budget_head_id == head.id)
+                    .scalar()
                 )
-                total_spent = sum(e.amount for e in exp_sum)
 
                 if total_rel > 0 or total_spent > 0:
                     summary_rows.append(
                         {
                             "Section": sec.name,
                             "Budget Head": f"{head.code} - {head.description}",
-                            "Total Released (PKR)": total_rel,
-                            "Total Spent (PKR)": total_spent,
-                            "Balance Remaining (PKR)": total_rel - total_spent,
+                            "Shared Total Released (PKR)": total_rel,
+                            "Shared Total Spent (PKR)": total_spent,
+                            "Shared Remaining Balance (PKR)": total_rel - total_spent,
                         }
                     )
 

@@ -66,6 +66,9 @@ def main_portal():
 
     choice = st.sidebar.radio("Navigation", menu)
 
+    if st.sidebar.button("🔄 Refresh Data"):
+        st.rerun()
+
     if st.sidebar.button("Logout"):
         st.session_state["authenticated"] = False
         st.session_state["username"] = None
@@ -84,7 +87,7 @@ def main_portal():
         render_expenditure_entry(db)
 
     elif choice == "Reports":
-        st.title("📈 Reports & Analytics")
+        render_reports(db)
 
     elif choice == "Users & Sections":
         st.title("⚙️ User & Section Management")
@@ -93,9 +96,6 @@ def main_portal():
             render_section_management(db)
         with tab2:
             render_user_management(db)
-
-    elif choice == "Reports":
-        render_reports(db)
 
     elif choice == "Budget Heads":
         st.title("📋 Budget Head Setup")

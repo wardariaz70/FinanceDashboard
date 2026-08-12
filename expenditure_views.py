@@ -9,22 +9,17 @@ UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-def get_budget_head_balance(db, section_id: int, budget_head_id: int) -> float:
+def get_budget_head_balance(db, budget_head_id: int) -> float:
+    """Calculates shared remaining balance for a budget head across all assigned sections."""
     total_released = (
         db.query(func.coalesce(func.sum(FundRelease.amount), 0.0))
-        .filter(
-            FundRelease.section_id == section_id,
-            FundRelease.budget_head_id == budget_head_id,
-        )
+        .filter(FundRelease.budget_head_id == budget_head_id)
         .scalar()
     )
 
     total_spent = (
         db.query(func.coalesce(func.sum(Expenditure.amount), 0.0))
-        .filter(
-            Expenditure.section_id == section_id,
-            Expenditure.budget_head_id == budget_head_id,
-        )
+        .filter(Expenditure.budget_head_id == budget_head_id)
         .scalar()
     )
 
@@ -47,7 +42,6 @@ def render_expenditure_entry(db):
         return
 
     sec_map = {s.name: s.id for s in sections}
-    head_map = {f"{h.code} - {h.description}": h.id for h in budget_heads}
 
     col1, col2 = st.columns([1, 2])
 
@@ -64,17 +58,29 @@ def render_expenditure_entry(db):
             )
             sec_id = sec_map[selected_sec_name]
 
+        # Filter available budget heads: only budget heads assigned to this section
+        available_heads = [
+            h for h in budget_heads
+            if any(s.id == sec_id for s in h.sections)
+        ]
+
+        if not available_heads:
+            st.warning(f"No budget heads assigned to section **{selected_sec_name}**.")
+            return
+
+        head_map = {f"{h.code} - {h.description}": h.id for h in available_heads}
+
         selected_head_label = st.selectbox(
             "Select Budget Head", list(head_map.keys())
         )
         head_id = head_map[selected_head_label]
 
-        current_balance = get_budget_head_balance(db, sec_id, head_id)
+        current_balance = get_budget_head_balance(db, head_id)
 
         if current_balance <= 0:
-            st.error(f"Available Balance: PKR {current_balance:,.2f}")
+            st.error(f"Shared Available Balance: PKR {current_balance:,.2f}")
         else:
-            st.success(f"Available Balance: PKR {current_balance:,.2f}")
+            st.success(f"Shared Available Balance: PKR {current_balance:,.2f}")
 
         with st.form("expenditure_form", clear_on_submit=True):
             bill_no = st.text_input("Bill / Voucher Number")
