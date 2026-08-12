@@ -108,4 +108,4 @@ def main_portal():
 if not st.session_state["authenticated"]:
     login_screen()
 else:
-    main_portal()
+    main_portal() #test
