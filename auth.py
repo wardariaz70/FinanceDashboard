@@ -41,3 +41,17 @@ def create_initial_admin(db: Session):
         db.add(admin_user)
         db.commit()
         print("Default admin created (Username: admin, Password: admin123)")
+
+
+# 4. Helper to Seed Initial Secretary User
+def create_initial_secretary(db: Session):
+    """Creates a default secretary user if not exists in the DB."""
+    sec_exists = db.query(User).filter(User.username == "secretary").first()
+    if not sec_exists:
+        hashed_pwd = hash_password("sec123")
+        sec_user = User(
+            username="secretary", password=hashed_pwd, role="Secretary"
+        )
+        db.add(sec_user)
+        db.commit()
+        print("Default secretary created (Username: secretary, Password: sec123)")

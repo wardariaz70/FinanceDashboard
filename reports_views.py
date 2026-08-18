@@ -13,16 +13,82 @@ def convert_df_to_excel(df: pd.DataFrame, sheet_name: str = "Report") -> bytes:
 
 
 def render_reports(db):
-    st.subheader("📈 Financial Reports & Excel Export")
-
     username = st.session_state.get("username")
     current_user = db.query(User).filter(User.username == username).first()
+    is_secretary = (st.session_state.get("role") == "Secretary" or (current_user and current_user.role == "Secretary"))
+
+    # Apply typography & hover animations ONLY FOR SECRETARY
+    if is_secretary:
+        st.markdown("""
+            <style>
+            @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+            .sec-report-container, .sec-report-container * {
+                font-family: 'Plus Jakarta Sans', 'Outfit', system-ui, -apple-system, sans-serif !important;
+            }
+
+            .sec-report-title {
+                font-family: 'Outfit', 'Plus Jakarta Sans', sans-serif !important;
+                font-size: 2.2rem;
+                font-weight: 800;
+                color: #F8FAFC;
+                letter-spacing: -0.5px;
+                margin-bottom: 5px;
+                transition: transform 0.25s ease;
+            }
+            .sec-report-title:hover {
+                transform: translateY(-2px);
+                color: #38BDF8;
+            }
+
+            .sec-report-sub {
+                font-family: 'Outfit', sans-serif !important;
+                font-size: 1.3rem;
+                font-weight: 700;
+                color: #E2E8F0;
+                margin-top: 10px;
+                margin-bottom: 10px;
+                transition: transform 0.25s ease;
+            }
+            .sec-report-sub:hover {
+                transform: translateY(-2px);
+                color: #38BDF8;
+            }
+
+            div[data-testid="stMetricValue"] {
+                font-family: 'Outfit', sans-serif !important;
+                font-weight: 700 !important;
+                transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), color 0.25s ease !important;
+            }
+            div[data-testid="stMetricValue"]:hover {
+                transform: translateY(-3px) scale(1.03) !important;
+                color: #38BDF8 !important;
+            }
+
+            .stDataFrame tbody tr {
+                transition: transform 0.2s ease, background-color 0.2s ease !important;
+            }
+            .stDataFrame tbody tr:hover {
+                transform: translateY(-2px) scale(1.005) !important;
+                background-color: rgba(56, 189, 248, 0.08) !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+
+    if is_secretary:
+        st.markdown('<div class="sec-report-container"><div class="sec-report-title">Financial Reports & Excel Export</div></div>', unsafe_allow_html=True)
+    else:
+        st.subheader("📈 Financial Reports & Excel Export")
 
     sections = db.query(Section).all()
     budget_heads = db.query(BudgetHead).all()
 
     # --- FILTER SECTION ---
-    st.markdown("##### 🔍 Filter Report Data")
+    if is_secretary:
+        st.markdown('<div class="sec-report-container"><div class="sec-report-sub">Filter Report Data</div></div>', unsafe_allow_html=True)
+    else:
+        st.markdown("##### 🔍 Filter Report Data")
+
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -66,7 +132,10 @@ def render_reports(db):
 
     # 1. EXPENDITURE REPORT
     if report_type == "Expenditure Report":
-        st.markdown("#### 📝 Expenditure Report")
+        if is_secretary:
+            st.markdown('<div class="sec-report-container"><div class="sec-report-sub">Expenditure Report</div></div>', unsafe_allow_html=True)
+        else:
+            st.markdown("#### 📝 Expenditure Report")
         query = db.query(Expenditure)
 
         if sec_filter:
@@ -87,6 +156,7 @@ def render_reports(db):
                     "Budget Head Description": (
                         e.budget_head.description if e.budget_head else "N/A"
                     ),
+                    "Type": getattr(e.budget_head, "category", "ERE") if e.budget_head else "N/A",
                     "Purpose": e.purpose,
                     "Amount (PKR)": e.amount,
                 }
@@ -104,7 +174,7 @@ def render_reports(db):
             # Export Button
             excel_data = convert_df_to_excel(df, sheet_name="Expenditures")
             st.download_button(
-                label="📥 Export Expenditure Report to Excel",
+                label="Export Expenditure Report to Excel" if is_secretary else "📥 Export Expenditure Report to Excel",
                 data=excel_data,
                 file_name="Expenditure_Report.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -114,7 +184,10 @@ def render_reports(db):
 
     # 2. FUND RELEASE REPORT
     elif report_type == "Fund Release Report":
-        st.markdown("#### 💸 Fund Release Report")
+        if is_secretary:
+            st.markdown('<div class="sec-report-container"><div class="sec-report-sub">Fund Release Report</div></div>', unsafe_allow_html=True)
+        else:
+            st.markdown("#### 💸 Fund Release Report")
         query = db.query(FundRelease)
 
         if sec_filter:
@@ -147,7 +220,7 @@ def render_reports(db):
 
             excel_data = convert_df_to_excel(df, sheet_name="Fund Releases")
             st.download_button(
-                label="📥 Export Fund Release Report to Excel",
+                label="Export Fund Release Report to Excel" if is_secretary else "📥 Export Fund Release Report to Excel",
                 data=excel_data,
                 file_name="Fund_Release_Report.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -157,11 +230,14 @@ def render_reports(db):
 
     # 3. COMBINED SUMMARY REPORT
     elif report_type == "Combined Summary":
-        st.markdown("#### 📊 Combined Section & Head Financial Summary")
+        if is_secretary:
+            st.markdown('<div class="sec-report-container"><div class="sec-report-sub">Combined Section & Head Financial Summary</div></div>', unsafe_allow_html=True)
+        else:
+            st.markdown("#### 📊 Combined Section & Head Financial Summary")
 
         summary_rows = []
         target_sections = (
-            [s for s in sections if s.id == sec_filter] if sec_filter else sections
+            [s for s in sec_filter] if isinstance(sec_filter, list) else ([s for s in sections if s.id == sec_filter] if sec_filter else sections)
         )
         target_heads = (
             [h for h in budget_heads if h.id == head_filter]
@@ -203,7 +279,7 @@ def render_reports(db):
 
             excel_data = convert_df_to_excel(df_summary, sheet_name="Financial Summary")
             st.download_button(
-                label="📥 Export Financial Summary to Excel",
+                label="Export Financial Summary to Excel" if is_secretary else "📥 Export Financial Summary to Excel",
                 data=excel_data,
                 file_name="Financial_Summary_Report.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

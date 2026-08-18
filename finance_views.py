@@ -32,6 +32,12 @@ def render_budget_heads_management(db):
             description = st.text_input(
                 "Description (e.g., Stationery & Printing)"
             )
+            category = st.radio(
+                "Budget Head Type (Required)",
+                ["ERE", "NON-ERE"],
+                horizontal=True,
+                help="Specify if this head belongs to ERE (Employees Related Expenses) or NON-ERE."
+            )
             selected_labels = st.multiselect(
                 "Assign to Sections / Officers",
                 options=list(label_to_sec.keys()),
@@ -53,11 +59,12 @@ def render_budget_heads_management(db):
                         new_head = BudgetHead(
                             code=code.strip().upper(),
                             description=description.strip(),
+                            category=category,
                             sections=assigned_sections,
                         )
                         db.add(new_head)
                         db.commit()
-                        st.success(f"Budget Head '{code.upper()}' added successfully!")
+                        st.success(f"Budget Head '{code.upper()}' ({category}) added successfully!")
                         st.rerun()
                 else:
                     st.warning("Please fill in both Code and Description.")
@@ -74,33 +81,42 @@ def render_budget_heads_management(db):
                     "ID": h.id,
                     "Code": h.code,
                     "Description": h.description,
+                    "Type": getattr(h, "category", "ERE"),
                     "Assigned Sections / Officers": assigned_sec_names
                 })
             df_heads = pd.DataFrame(heads_data)
             st.dataframe(df_heads, use_container_width=True)
 
-            # Update Section Assignments for an existing Budget Head
+            # Update Section Assignments & Category for an existing Budget Head
             st.markdown("---")
-            st.markdown("##### Edit Section Assignments")
+            st.markdown("##### Edit Budget Head Setup")
             head_options = {f"{h.code} - {h.description}": h for h in heads}
             selected_head_label = st.selectbox(
                 "Select Budget Head to Edit", list(head_options.keys())
             )
             target_head = head_options[selected_head_label]
             current_assigned_labels = [sec_id_to_label[s.id] for s in target_head.sections if s.id in sec_id_to_label]
+            current_category = getattr(target_head, "category", "ERE")
 
             with st.form("edit_budget_head_sections_form"):
+                new_category = st.radio(
+                    f"Update Type for {target_head.code}",
+                    ["ERE", "NON-ERE"],
+                    index=0 if current_category == "ERE" else 1,
+                    horizontal=True
+                )
                 new_sec_selection = st.multiselect(
                     f"Assigned Sections / Officers for {target_head.code}",
                     options=list(label_to_sec.keys()),
                     default=current_assigned_labels
                 )
-                save_changes = st.form_submit_button("Update Assignments")
+                save_changes = st.form_submit_button("Update Budget Head Setup")
 
                 if save_changes:
+                    target_head.category = new_category
                     target_head.sections = [label_to_sec[lbl] for lbl in new_sec_selection if lbl in label_to_sec]
                     db.commit()
-                    st.success(f"Updated section assignments for '{target_head.code}'!")
+                    st.success(f"Updated setup for '{target_head.code}'!")
                     st.rerun()
 
             # Admin-Only Delete Budget Head Section

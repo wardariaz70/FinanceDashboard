@@ -1,12 +1,19 @@
+import importlib
+import secretary_views
+import reports_views
+from secretary_views import render_secretary_dashboard
 from reports_views import render_reports
 from admin_views import render_section_management, render_user_management
-from auth import authenticate_user, create_initial_admin
+from auth import authenticate_user, create_initial_admin, create_initial_secretary
 from dashboard_views import render_dashboard
 from database import SessionLocal
 from expenditure_views import render_expenditure_entry
 from finance_views import render_budget_heads_management, render_fund_release
 import streamlit as st
 from models import init_db
+
+importlib.reload(secretary_views)
+importlib.reload(reports_views)
 
 st.set_page_config(
     page_title="NH&CD Finance Portal", page_icon="💰", layout="wide"
@@ -15,6 +22,7 @@ st.set_page_config(
 init_db()
 db = SessionLocal()
 create_initial_admin(db)
+create_initial_secretary(db)
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -48,7 +56,13 @@ def login_screen():
 
 
 def main_portal():
-    st.sidebar.title(f"Welcome, {st.session_state['username']}")
+    col_sb_title, col_sb_ref = st.sidebar.columns([4, 1])
+    with col_sb_title:
+        st.title(f"Welcome, {st.session_state['username']}")
+    with col_sb_ref:
+        if st.button("", icon=":material/refresh:", help="Refresh Portal Data", key="top_left_refresh"):
+            st.rerun()
+
     st.sidebar.caption(f"Role: {st.session_state['role']}")
 
     if st.session_state["role"] == "Finance":
@@ -61,13 +75,12 @@ def main_portal():
             "Budget Heads",
             "Settings",
         ]
+    elif st.session_state["role"] == "Secretary":
+        menu = ["Executive Dashboard", "Reports"]
     else:
         menu = ["Dashboard", "Expenditure Entry", "Reports"]
 
     choice = st.sidebar.radio("Navigation", menu)
-
-    if st.sidebar.button("🔄 Refresh Data"):
-        st.rerun()
 
     if st.sidebar.button("Logout"):
         st.session_state["authenticated"] = False
@@ -76,8 +89,11 @@ def main_portal():
         st.rerun()
 
     # --- ROUTING ---
-    if choice == "Dashboard":
-        render_dashboard(db)
+    if choice in ("Dashboard", "Executive Dashboard"):
+        if st.session_state["role"] == "Secretary":
+            render_secretary_dashboard(db)
+        else:
+            render_dashboard(db)
 
     elif choice == "Fund Release":
         st.title("💸 Fund Release Module")
@@ -108,5 +124,4 @@ def main_portal():
 if not st.session_state["authenticated"]:
     login_screen()
 else:
-    main_portal() #test
-    #test
+    main_portal()

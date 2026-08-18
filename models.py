@@ -52,6 +52,7 @@ class BudgetHead(Base):
     id = Column(Integer, primary_key=True, index=True)
     code = Column(String(50), unique=True, nullable=False)
     description = Column(String(200), nullable=False)
+    category = Column(String(20), nullable=False, default="ERE")  # 'ERE' or 'NON-ERE'
 
     releases = relationship("FundRelease", back_populates="budget_head")
     expenditures = relationship("Expenditure", back_populates="budget_head")
