@@ -400,7 +400,7 @@ def render_secretary_dashboard(db):
     with col_sort:
         sort_choice = st.selectbox(
             "Sort Summary By",
-            ["Head Code (A-Z)", "Highest Released", "Highest Spent", "Highest Remaining", "Highest Utilization"]
+            ["Head Code (A-Z)", "Highest Base Allocation", "Highest Released", "Highest Spent", "Highest Remaining", "Highest Utilization"]
         )
 
     summary_rows = []
@@ -411,28 +411,46 @@ def render_secretary_dashboard(db):
         if selected_cat != "All Categories" and h_cat != selected_cat:
             continue
 
+        h_base = getattr(h, "base_allocation", 0.0)
         h_rel = sum(r.amount for r in all_releases if r.budget_head_id == h.id)
-        h_exp = sum(e.amount for e in all_expenditures if e.budget_head_id == h.id)
-        h_bal = h_rel - h_exp
-        h_util = (h_exp / h_rel * 100) if h_rel > 0 else 0.0
+        
+        # Re+ and Re- calculations
+        re_in = db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0)).filter(Reappropriation.target_head_id == h.id, Reappropriation.reap_type == "IN").scalar()
+        re_out = db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0)).filter(Reappropriation.source_head_id == h.id, Reappropriation.reap_type == "OUT").scalar()
 
-        if h_rel > 0 or h_exp > 0:
+        h_exp = sum(e.amount for e in all_expenditures if e.budget_head_id == h.id)
+        wo_amt = db.query(func.coalesce(func.sum(WorkOrder.amount), 0.0)).filter(WorkOrder.budget_head_id == h.id, WorkOrder.status == "Pending Expenditure").scalar()
+
+        net_pool = (h_rel + re_in - re_out)
+        net_bal_after_exp = net_pool - h_exp
+        net_bal_after_wo = net_bal_after_exp - wo_amt
+        h_util = (h_exp / net_pool * 100) if net_pool > 0 else 0.0
+
+        if h_base > 0 or h_rel > 0 or h_exp > 0 or re_in > 0 or re_out > 0 or wo_amt > 0:
             summary_rows.append({
                 "Head Code": h.code,
                 "Description": h.description,
                 "Type": h_cat,
+                "Base Allocation (PKR)": f"{h_base:,.2f}",
+                "Total Released (PKR)": f"{h_rel:,.2f}",
+                "Re+ (PKR)": f"{re_in:,.2f}",
+                "Re- (PKR)": f"{re_out:,.2f}",
+                "Total Spent (PKR)": f"{h_exp:,.2f}",
+                "Work Orders (PKR)": f"{wo_amt:,.2f}",
+                "Net Bal (After W/O) (PKR)": f"{net_bal_after_wo:,.2f}",
+                "Net Bal (After Exp) (PKR)": f"{net_bal_after_exp:,.2f}",
+                "Utilization Rate": f"{h_util:.1f}%",
+                "_raw_base": h_base,
                 "_raw_rel": h_rel,
                 "_raw_exp": h_exp,
-                "_raw_bal": h_bal,
+                "_raw_bal": net_bal_after_wo,
                 "_raw_util": h_util,
-                "Released (PKR)": f"{h_rel:,.2f}",
-                "Spent (PKR)": f"{h_exp:,.2f}",
-                "Remaining (PKR)": f"{h_bal:,.2f}",
-                "Utilization Rate": f"{h_util:.1f}%"
             })
 
     # Apply Sorting
-    if sort_choice == "Highest Released":
+    if sort_choice == "Highest Base Allocation":
+        summary_rows.sort(key=lambda x: x["_raw_base"], reverse=True)
+    elif sort_choice == "Highest Released":
         summary_rows.sort(key=lambda x: x["_raw_rel"], reverse=True)
     elif sort_choice == "Highest Spent":
         summary_rows.sort(key=lambda x: x["_raw_exp"], reverse=True)
@@ -444,7 +462,6 @@ def render_secretary_dashboard(db):
         summary_rows.sort(key=lambda x: x["Head Code"])
 
     if summary_rows:
-        # Clean temporary raw sorting keys
         display_summary = []
         for r in summary_rows:
             clean_r = {k: v for k, v in r.items() if not k.startswith("_raw_")}
@@ -462,6 +479,10 @@ def render_secretary_dashboard(db):
     if all_expenditures:
         exp_table_data = []
         for e in all_expenditures:
+            ddo_s = getattr(e, "ddo_status", "PENDING")
+            if ddo_s == "IN_PROGRESS":
+                ddo_s = "IN PROGRESS"
+            badge = "🟢 AUTHORISED" if ddo_s == "AUTHORISED" else ("🔵 IN PROGRESS" if ddo_s == "IN PROGRESS" else ("🟡 OBJECTION" if ddo_s == "OBJECTION" else ("🔴 REJECTED" if ddo_s == "REJECTED" else "⏳ PENDING")))
             exp_table_data.append({
                 "Bill No": e.bill_no,
                 "Date": e.expenditure_date,
@@ -469,6 +490,7 @@ def render_secretary_dashboard(db):
                 "Budget Head": f"{e.budget_head.code} ({getattr(e.budget_head, 'category', 'ERE')})" if e.budget_head else "N/A",
                 "Purpose": e.purpose,
                 "Amount (PKR)": f"{e.amount:,.2f}",
+                "DDO Scrutiny Status": badge,
             })
         df_exp_hist = pd.DataFrame(exp_table_data)
         st.dataframe(df_exp_hist, use_container_width=True)

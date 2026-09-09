@@ -123,7 +123,7 @@ def render_reports(db):
         # Report Type Selector
         report_type = st.selectbox(
             "Select Report Type",
-            ["Expenditure Report", "Fund Release Report", "Combined Summary"],
+            ["Expenditure Report", "Fund Release Report", "Reappropriation Report", "Combined Summary"],
         )
 
     st.markdown("---")
@@ -159,6 +159,7 @@ def render_reports(db):
                     "Type": getattr(e.budget_head, "category", "ERE") if e.budget_head else "N/A",
                     "Purpose": e.purpose,
                     "Amount (PKR)": e.amount,
+                    "DDO Scrutiny Status": getattr(e, "ddo_status", "PENDING")
                 }
                 for e in expenditures
             ]
@@ -208,6 +209,7 @@ def render_reports(db):
                         r.budget_head.description if r.budget_head else "N/A"
                     ),
                     "Amount (PKR)": r.amount,
+                    "Released By": getattr(r, "released_by", "admin")
                 }
                 for r in releases
             ]
@@ -228,12 +230,63 @@ def render_reports(db):
         else:
             st.info("No fund release records match the selected filters.")
 
-    # 3. COMBINED SUMMARY REPORT
+    # 3. REAPPROPRIATION REPORT (Re+ & Re-)
+    elif report_type == "Reappropriation Report":
+        if is_secretary:
+            st.markdown('<div class="sec-report-container"><div class="sec-report-sub">Reappropriation Audit Report (Re+ & Re-)</div></div>', unsafe_allow_html=True)
+        else:
+            st.markdown("#### 🔄 Reappropriation Audit Report (Re+ & Re-)")
+        
+        from models import Reappropriation
+        query = db.query(Reappropriation)
+        if sec_filter:
+            query = query.filter(Reappropriation.section_id == sec_filter)
+        if head_filter:
+            query = query.filter((Reappropriation.target_head_id == head_filter) | (Reappropriation.source_head_id == head_filter))
+
+        reaps = query.order_by(Reappropriation.reap_date.desc()).all()
+
+        if reaps:
+            data = []
+            for r in reaps:
+                head_str = "-"
+                if r.reap_type == "IN" and r.target_head:
+                    head_str = f"{r.target_head.code} - {r.target_head.description}"
+                elif r.reap_type == "OUT" and r.source_head:
+                    head_str = f"{r.source_head.code} - {r.source_head.description}"
+
+                data.append({
+                    "ID": r.id,
+                    "Date": r.reap_date,
+                    "Type": "Re+ (In)" if r.reap_type == "IN" else "Re- (Out)",
+                    "Budget Head": head_str,
+                    "Section": r.section.name if r.section else "General Pool",
+                    "Amount (PKR)": r.amount,
+                    "Reason / Ref": r.reason or "-",
+                    "Created By": r.created_by
+                })
+            df_reap_rep = pd.DataFrame(data)
+            st.dataframe(df_reap_rep, use_container_width=True)
+
+            excel_data = convert_df_to_excel(df_reap_rep, sheet_name="Reappropriation Report")
+            st.download_button(
+                label="Export Reappropriation Report to Excel" if is_secretary else "📥 Export Reappropriation Report to Excel",
+                data=excel_data,
+                file_name="Reappropriation_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            st.info("No reappropriation records match the selected filters.")
+
+    # 4. COMBINED SUMMARY REPORT
     elif report_type == "Combined Summary":
         if is_secretary:
             st.markdown('<div class="sec-report-container"><div class="sec-report-sub">Combined Section & Head Financial Summary</div></div>', unsafe_allow_html=True)
         else:
             st.markdown("#### 📊 Combined Section & Head Financial Summary")
+
+        from sqlalchemy import func
+        from models import Reappropriation, WorkOrder
 
         summary_rows = []
         target_sections = (
@@ -248,28 +301,50 @@ def render_reports(db):
         for sec in target_sections:
             sec_heads = [h for h in target_heads if any(s.id == sec.id for s in h.sections)]
             for head in sec_heads:
-                # Sum Released for head (shared pool)
+                h_base = getattr(head, "base_allocation", 0.0)
                 total_rel = (
                     db.query(func.coalesce(func.sum(FundRelease.amount), 0.0))
                     .filter(FundRelease.budget_head_id == head.id)
                     .scalar()
                 )
-
-                # Sum Spent for head across all assigned expenditures
+                re_in = (
+                    db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0))
+                    .filter(Reappropriation.target_head_id == head.id, Reappropriation.reap_type == "IN")
+                    .scalar()
+                )
+                re_out = (
+                    db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0))
+                    .filter(Reappropriation.source_head_id == head.id, Reappropriation.reap_type == "OUT")
+                    .scalar()
+                )
                 total_spent = (
                     db.query(func.coalesce(func.sum(Expenditure.amount), 0.0))
                     .filter(Expenditure.budget_head_id == head.id)
                     .scalar()
                 )
+                wo_amt = (
+                    db.query(func.coalesce(func.sum(WorkOrder.amount), 0.0))
+                    .filter(WorkOrder.budget_head_id == head.id, WorkOrder.status == "Pending Expenditure")
+                    .scalar()
+                )
 
-                if total_rel > 0 or total_spent > 0:
+                net_pool = total_rel + re_in - re_out
+                net_bal_after_exp = net_pool - total_spent
+                net_bal_after_wo = net_bal_after_exp - wo_amt
+
+                if h_base > 0 or total_rel > 0 or total_spent > 0 or re_in > 0 or re_out > 0 or wo_amt > 0:
                     summary_rows.append(
                         {
                             "Section": sec.name,
                             "Budget Head": f"{head.code} - {head.description}",
-                            "Shared Total Released (PKR)": total_rel,
-                            "Shared Total Spent (PKR)": total_spent,
-                            "Shared Remaining Balance (PKR)": total_rel - total_spent,
+                            "Base Allocation (PKR)": h_base,
+                            "Total Released (PKR)": total_rel,
+                            "Re+ (PKR)": re_in,
+                            "Re- (PKR)": re_out,
+                            "Total Spent (PKR)": total_spent,
+                            "Work Orders (PKR)": wo_amt,
+                            "Net Bal (After W/O) (PKR)": net_bal_after_wo,
+                            "Net Bal (After Exp) (PKR)": net_bal_after_exp,
                         }
                     )
 

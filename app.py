@@ -1,19 +1,32 @@
 import importlib
 import secretary_views
 import reports_views
+import ddo_views
+import reappropriation_views
+import work_order_views
+import dashboard_views
+import finance_views
 from secretary_views import render_secretary_dashboard
 from reports_views import render_reports
 from admin_views import render_section_management, render_user_management
-from auth import authenticate_user, create_initial_admin, create_initial_secretary
+from auth import authenticate_user, create_initial_admin, create_initial_secretary, create_initial_ddo
 from dashboard_views import render_dashboard
 from database import SessionLocal
 from expenditure_views import render_expenditure_entry
 from finance_views import render_budget_heads_management, render_fund_release
+from ddo_views import render_ddo_module
+from reappropriation_views import render_reappropriation_module
+from work_order_views import render_work_orders_module
 import streamlit as st
 from models import init_db
 
 importlib.reload(secretary_views)
 importlib.reload(reports_views)
+importlib.reload(ddo_views)
+importlib.reload(reappropriation_views)
+importlib.reload(work_order_views)
+importlib.reload(dashboard_views)
+importlib.reload(finance_views)
 
 st.set_page_config(
     page_title="NH&CD Finance Portal", page_icon="💰", layout="wide"
@@ -23,6 +36,7 @@ init_db()
 db = SessionLocal()
 create_initial_admin(db)
 create_initial_secretary(db)
+create_initial_ddo(db)
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -69,16 +83,20 @@ def main_portal():
         menu = [
             "Dashboard",
             "Fund Release",
+            "Reappropriation",
+            "Work Orders",
             "Expenditure Entry",
             "Reports",
             "Users & Sections",
             "Budget Heads",
             "Settings",
         ]
+    elif st.session_state["role"] == "DDO":
+        menu = ["DDO Scrutiny", "Reports"]
     elif st.session_state["role"] == "Secretary":
         menu = ["Executive Dashboard", "Reports"]
     else:
-        menu = ["Dashboard", "Expenditure Entry", "Reports"]
+        menu = ["Dashboard", "Work Orders", "Expenditure Entry", "Reports"]
 
     choice = st.sidebar.radio("Navigation", menu)
 
@@ -95,9 +113,18 @@ def main_portal():
         else:
             render_dashboard(db)
 
+    elif choice == "DDO Scrutiny":
+        render_ddo_module(db)
+
+    elif choice == "Reappropriation":
+        render_reappropriation_module(db)
+
+    elif choice == "Work Orders":
+        render_work_orders_module(db)
+
     elif choice == "Fund Release":
         st.title("💸 Fund Release Module")
-        render_fund_release(db)
+        finance_views.render_fund_release(db)
 
     elif choice == "Expenditure Entry":
         render_expenditure_entry(db)
@@ -115,7 +142,7 @@ def main_portal():
 
     elif choice == "Budget Heads":
         st.title("📋 Budget Head Setup")
-        render_budget_heads_management(db)
+        finance_views.render_budget_heads_management(db)
 
     elif choice == "Settings":
         st.title("⚙️ System Settings")

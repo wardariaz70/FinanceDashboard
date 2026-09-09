@@ -1,3 +1,4 @@
+from datetime import date, datetime
 import os
 import pandas as pd
 import streamlit as st
@@ -32,6 +33,12 @@ def render_budget_heads_management(db):
             description = st.text_input(
                 "Description (e.g., Stationery & Printing)"
             )
+            base_allocation = st.number_input(
+                "Sanctioned Base Allocation (PKR)",
+                min_value=0.0,
+                step=10000.0,
+                help="Official annual sanctioned budget allocation for this head."
+            )
             category = st.radio(
                 "Budget Head Type (Required)",
                 ["ERE", "NON-ERE"],
@@ -60,6 +67,7 @@ def render_budget_heads_management(db):
                             code=code.strip().upper(),
                             description=description.strip(),
                             category=category,
+                            base_allocation=base_allocation,
                             sections=assigned_sections,
                         )
                         db.add(new_head)
@@ -82,6 +90,7 @@ def render_budget_heads_management(db):
                     "Code": h.code,
                     "Description": h.description,
                     "Type": getattr(h, "category", "ERE"),
+                    "Base Allocation (PKR)": f"{getattr(h, 'base_allocation', 0.0):,.2f}",
                     "Assigned Sections / Officers": assigned_sec_names
                 })
             df_heads = pd.DataFrame(heads_data)
@@ -97,8 +106,15 @@ def render_budget_heads_management(db):
             target_head = head_options[selected_head_label]
             current_assigned_labels = [sec_id_to_label[s.id] for s in target_head.sections if s.id in sec_id_to_label]
             current_category = getattr(target_head, "category", "ERE")
+            current_base_alloc = getattr(target_head, "base_allocation", 0.0)
 
             with st.form("edit_budget_head_sections_form"):
+                edit_base_alloc = st.number_input(
+                    f"Sanctioned Base Allocation (PKR) for {target_head.code}",
+                    min_value=0.0,
+                    value=float(current_base_alloc),
+                    step=10000.0
+                )
                 new_category = st.radio(
                     f"Update Type for {target_head.code}",
                     ["ERE", "NON-ERE"],
@@ -113,6 +129,7 @@ def render_budget_heads_management(db):
                 save_changes = st.form_submit_button("Update Budget Head Setup")
 
                 if save_changes:
+                    target_head.base_allocation = edit_base_alloc
                     target_head.category = new_category
                     target_head.sections = [label_to_sec[lbl] for lbl in new_sec_selection if lbl in label_to_sec]
                     db.commit()
@@ -142,7 +159,6 @@ def render_budget_heads_management(db):
                             if not confirm_check:
                                 st.error("Please check the confirmation box to proceed with deletion.")
                             else:
-                                # 1. Delete associated expenditures and file attachments
                                 exps = db.query(Expenditure).filter(Expenditure.budget_head_id == target_del_head.id).all()
                                 for exp in exps:
                                     if exp.invoice_path and os.path.exists(exp.invoice_path):
@@ -152,23 +168,78 @@ def render_budget_heads_management(db):
                                             pass
                                     db.delete(exp)
 
-                                # 2. Delete associated fund releases
                                 rels = db.query(FundRelease).filter(FundRelease.budget_head_id == target_del_head.id).all()
                                 for rel in rels:
                                     db.delete(rel)
 
-                                # 3. Clear section links
                                 target_del_head.sections = []
-
-                                # 4. Delete budget head entity
                                 del_code = target_del_head.code
                                 db.delete(target_del_head)
                                 db.commit()
 
                                 st.success(f"Budget Head '{del_code}' and all associated records deleted!")
                                 st.rerun()
+
+    # --- BASE ALLOCATION DEPOSIT & AUDIT LOGS ---
+    st.markdown("---")
+    st.markdown("##### 🏦 Base Allocation Deposit & Trail Logs")
+
+    col_ba1, col_ba2 = st.columns([1, 2])
+    from models import BaseAllocationLog
+
+    with col_ba1:
+        with st.form("deposit_base_allocation_form", clear_on_submit=True):
+            st.markdown("**Deposit Sanctioned Funds into Base Allocation**")
+            b_head_opts = {"General Base Allocation Pool": None}
+            if heads:
+                for h in heads:
+                    b_head_opts[f"{h.code} - {h.description}"] = h.id
+
+            selected_b_head_label = st.selectbox("Select Target Head (or General Pool)", list(b_head_opts.keys()))
+            deposit_amt = st.number_input("Deposit Amount (PKR)", min_value=1.0, step=50000.0)
+            notes_str = st.text_input("Reason / Government Sanction Ref", placeholder="e.g. Supplementary Grant 2026")
+
+            sub_dep = st.form_submit_button("Deposit into Base Allocation")
+
+            if sub_dep:
+                target_b_id = b_head_opts[selected_b_head_label]
+                username = st.session_state.get("username", "admin")
+
+                if target_b_id:
+                    target_h_obj = db.query(BudgetHead).filter(BudgetHead.id == target_b_id).first()
+                    if target_h_obj:
+                        target_h_obj.base_allocation = getattr(target_h_obj, "base_allocation", 0.0) + deposit_amt
+
+                log_entry = BaseAllocationLog(
+                    budget_head_id=target_b_id,
+                    amount=deposit_amt,
+                    allocated_by=username,
+                    allocation_date=date.today(),
+                    notes=notes_str.strip() if notes_str else None
+                )
+                db.add(log_entry)
+                db.commit()
+                st.success(f"Successfully deposited PKR {deposit_amt:,.2f} into Base Allocation!")
+                st.rerun()
+
+    with col_ba2:
+        st.markdown("**Base Allocation Deposit Audit Logs**")
+        base_logs = db.query(BaseAllocationLog).order_by(BaseAllocationLog.id.desc()).all()
+        if base_logs:
+            b_data = []
+            for b in base_logs:
+                b_data.append({
+                    "ID": b.id,
+                    "Date": b.allocation_date,
+                    "Target Head": f"{b.budget_head.code} - {b.budget_head.description}" if b.budget_head else "General Pool",
+                    "Amount (PKR)": f"{b.amount:,.2f}",
+                    "Deposited By": b.allocated_by,
+                    "Notes / Ref": b.notes or "-"
+                })
+            df_b = pd.DataFrame(b_data)
+            st.dataframe(df_b, use_container_width=True)
         else:
-            st.info("No Budget Heads added yet.")
+            st.info("No base allocation deposits recorded yet.")
 
 
 # --- 2. FUND RELEASE MODULE ---
@@ -193,11 +264,11 @@ def render_fund_release(db):
         selected_sec_name = st.selectbox("Select Section", list(sec_map.keys()))
         selected_sec_id = sec_map[selected_sec_name]
 
-        # Filter budget heads assigned to this section or unassigned
+        # Filter budget heads strictly assigned to this section
         sec_obj = db.query(Section).filter(Section.id == selected_sec_id).first()
         available_heads = [
             h for h in budget_heads 
-            if not h.sections or any(s.id == selected_sec_id for s in h.sections)
+            if any(s.id == selected_sec_id for s in h.sections)
         ]
 
         if not available_heads:
@@ -217,12 +288,15 @@ def render_fund_release(db):
 
             if submit:
                 head_id = head_map[selected_head_label]
+                releaser_username = st.session_state.get("username", "admin")
 
                 new_release = FundRelease(
                     section_id=selected_sec_id,
                     budget_head_id=head_id,
                     amount=amount,
                     release_date=release_date,
+                    released_by=releaser_username,
+                    release_timestamp=datetime.now()
                 )
                 db.add(new_release)
                 db.commit()
@@ -231,18 +305,20 @@ def render_fund_release(db):
                 )
                 st.rerun()
 
-    # Table displaying recent fund releases
+    # Table displaying recent fund releases with full Audit Log
     with col2:
-        st.markdown("##### Fund Release History")
+        st.markdown("##### Fund Release Detailed Audit Log")
         releases = db.query(FundRelease).order_by(FundRelease.id.desc()).all()
 
         if releases:
             rel_data = []
             for r in releases:
+                rel_timestamp = getattr(r, "release_timestamp", None)
+                ts_str = rel_timestamp.strftime("%Y-%m-%d %H:%M:%S") if rel_timestamp else str(r.release_date)
                 rel_data.append(
                     {
                         "ID": r.id,
-                        "Date": r.release_date,
+                        "Date & Time": ts_str,
                         "Section": r.section.name if r.section else "N/A",
                         "Budget Head": (
                             f"{r.budget_head.code} - {r.budget_head.description}"
@@ -250,6 +326,7 @@ def render_fund_release(db):
                             else "N/A"
                         ),
                         "Amount (PKR)": f"{r.amount:,.2f}",
+                        "Released By": getattr(r, "released_by", "admin")
                     }
                 )
             df_rel = pd.DataFrame(rel_data)

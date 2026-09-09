@@ -55,3 +55,17 @@ def create_initial_secretary(db: Session):
         db.add(sec_user)
         db.commit()
         print("Default secretary created (Username: secretary, Password: sec123)")
+
+
+# 5. Helper to Seed Initial DDO User
+def create_initial_ddo(db: Session):
+    """Creates a default DDO user if not exists in the DB."""
+    ddo_exists = db.query(User).filter(User.username == "ddo").first()
+    if not ddo_exists:
+        hashed_pwd = hash_password("ddo123")
+        ddo_user = User(
+            username="ddo", password=hashed_pwd, role="DDO"
+        )
+        db.add(ddo_user)
+        db.commit()
+        print("Default DDO created (Username: ddo, Password: ddo123)")
