@@ -1,7 +1,7 @@
 import io
 import pandas as pd
 import streamlit as st
-from models import BudgetHead, Expenditure, FundRelease, Section, User
+from models import BudgetHead, Expenditure, FundRelease, Reappropriation, Section, WorkOrder, BaseAllocationLog, User
 
 
 def convert_df_to_excel(df: pd.DataFrame, sheet_name: str = "Report") -> bytes:
@@ -301,31 +301,33 @@ def render_reports(db):
         for sec in target_sections:
             sec_heads = [h for h in target_heads if any(s.id == sec.id for s in h.sections)]
             for head in sec_heads:
-                h_base = getattr(head, "base_allocation", 0.0)
+                h_log = db.query(func.coalesce(func.sum(BaseAllocationLog.amount), 0.0)).filter(BaseAllocationLog.budget_head_id == head.id).scalar() or 0.0
+                h_col = getattr(head, "base_allocation", 0.0) or 0.0
+                h_base = h_log + h_col
                 total_rel = (
                     db.query(func.coalesce(func.sum(FundRelease.amount), 0.0))
-                    .filter(FundRelease.budget_head_id == head.id)
-                    .scalar()
+                    .filter(FundRelease.budget_head_id == head.id, FundRelease.section_id == sec.id)
+                    .scalar() or 0.0
                 )
                 re_in = (
                     db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0))
                     .filter(Reappropriation.target_head_id == head.id, Reappropriation.reap_type == "IN")
-                    .scalar()
+                    .scalar() or 0.0
                 )
                 re_out = (
                     db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0))
                     .filter(Reappropriation.source_head_id == head.id, Reappropriation.reap_type == "OUT")
-                    .scalar()
+                    .scalar() or 0.0
                 )
                 total_spent = (
                     db.query(func.coalesce(func.sum(Expenditure.amount), 0.0))
-                    .filter(Expenditure.budget_head_id == head.id)
-                    .scalar()
+                    .filter(Expenditure.budget_head_id == head.id, Expenditure.section_id == sec.id)
+                    .scalar() or 0.0
                 )
                 wo_amt = (
                     db.query(func.coalesce(func.sum(WorkOrder.amount), 0.0))
-                    .filter(WorkOrder.budget_head_id == head.id, WorkOrder.status == "Pending Expenditure")
-                    .scalar()
+                    .filter(WorkOrder.budget_head_id == head.id, WorkOrder.section_id == sec.id, WorkOrder.status == "Pending Expenditure")
+                    .scalar() or 0.0
                 )
 
                 net_pool = total_rel + re_in - re_out

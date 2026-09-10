@@ -77,9 +77,12 @@ def render_expenditure_entry(db):
                 with col_wo2:
                     if st.button("Convert to Expenditure", key=f"conv_wo_{wo.id}"):
                         st.session_state["active_convert_wo_id"] = wo.id
+                        st.session_state["exp_sec_id"] = wo.section_id
+                        st.session_state["exp_head_id"] = wo.budget_head_id
                         st.session_state["exp_bill_no"] = wo.order_no
                         st.session_state["exp_purpose"] = f"Work Order #{wo.order_no}: {wo.description} (Vendor: {wo.vendor_name})"
                         st.session_state["exp_amount"] = float(wo.amount)
+                        st.session_state["exp_form_ver"] = st.session_state.get("exp_form_ver", 0) + 1
                         st.success(f"Loaded Work Order #{wo.order_no} details into form below!")
                         st.rerun()
             st.markdown("---")
@@ -89,116 +92,160 @@ def render_expenditure_entry(db):
     with col1:
         st.markdown("##### Log Expenditure")
 
+        converting_wo_id = st.session_state.get("active_convert_wo_id")
+        if converting_wo_id:
+            wo_active = db.query(WorkOrder).filter(WorkOrder.id == converting_wo_id).first()
+            if wo_active:
+                st.info(f"🔄 **Converting Work Order #{wo_active.order_no}** (Vendor: {wo_active.vendor_name})")
+                if st.button("❌ Cancel Work Order Conversion"):
+                    st.session_state.pop("active_convert_wo_id", None)
+                    st.session_state.pop("exp_sec_id", None)
+                    st.session_state.pop("exp_head_id", None)
+                    st.session_state.pop("exp_bill_no", None)
+                    st.session_state.pop("exp_purpose", None)
+                    st.session_state.pop("exp_amount", None)
+                    st.session_state["exp_form_ver"] = st.session_state.get("exp_form_ver", 0) + 1
+                    st.rerun()
+
         if current_user and current_user.role == "Section" and current_user.section:
             selected_sec_name = current_user.section.name
             st.info(f"Section: **{selected_sec_name}**")
             sec_id = current_user.section_id
         else:
+            sec_list = list(sec_map.keys())
+            def_sec_idx = 0
+            if "exp_sec_id" in st.session_state:
+                target_sec = db.query(Section).filter(Section.id == st.session_state["exp_sec_id"]).first()
+                if target_sec and target_sec.name in sec_list:
+                    def_sec_idx = sec_list.index(target_sec.name)
+
             selected_sec_name = st.selectbox(
-                "Select Section", list(sec_map.keys())
+                "Select Section", sec_list, index=def_sec_idx
             )
             sec_id = sec_map[selected_sec_name]
 
-        # Filter available budget heads: only budget heads assigned to this section
+        # Filter available budget heads: assigned or unassigned
         available_heads = [
             h for h in budget_heads
-            if any(s.id == sec_id for s in h.sections)
+            if not h.sections or any(s.id == sec_id for s in h.sections)
         ]
 
         if not available_heads:
             st.warning(f"No budget heads assigned to section **{selected_sec_name}**.")
-            return
-
-        head_map = {f"{h.code} - {h.description}": h.id for h in available_heads}
-
-        selected_head_label = st.selectbox(
-            "Select Budget Head", list(head_map.keys())
-        )
-        head_id = head_map[selected_head_label]
-
-        current_balance = get_budget_head_balance(db, head_id)
-
-        if current_balance <= 0:
-            st.error(f"Shared Net Available Balance: PKR {current_balance:,.2f}")
         else:
-            st.success(f"Shared Net Available Balance: PKR {current_balance:,.2f}")
+            head_map = {f"{h.code} - {h.description}": h.id for h in available_heads}
+            head_labels = list(head_map.keys())
 
-        # Get pre-filled session state values (e.g. from Work Order conversion)
-        def_bill_no = st.session_state.get("exp_bill_no", "")
-        def_purpose = st.session_state.get("exp_purpose", "")
-        def_amount = float(st.session_state.get("exp_amount", 1.0))
+            def_head_idx = 0
+            if "exp_head_id" in st.session_state:
+                target_head = db.query(BudgetHead).filter(BudgetHead.id == st.session_state["exp_head_id"]).first()
+                if target_head:
+                    expected_label = f"{target_head.code} - {target_head.description}"
+                    if expected_label in head_labels:
+                        def_head_idx = head_labels.index(expected_label)
 
-        with st.form("expenditure_form", clear_on_submit=False):
-            bill_no = st.text_input("Bill / Voucher Number", value=def_bill_no)
-            purpose = st.text_area("Purpose / Description", value=def_purpose)
-            amount = st.number_input(
-                "Amount (PKR)", min_value=1.0, value=max(1.0, def_amount), step=500.0
+            selected_head_label = st.selectbox(
+                "Select Budget Head", head_labels, index=def_head_idx
             )
-            exp_date = st.date_input("Expenditure Date")
+            head_id = head_map[selected_head_label]
 
-            uploaded_file = st.file_uploader(
-                "Attach Invoice / Receipt (PDF, PNG, JPG)",
-                type=["pdf", "png", "jpg", "jpeg"],
-            )
+            current_balance = get_budget_head_balance(db, head_id)
 
-            submit = st.form_submit_button("Record Expenditure")
+            if current_balance <= 0:
+                st.error(f"Shared Net Available Balance: PKR {current_balance:,.2f}")
+            else:
+                st.success(f"Shared Net Available Balance: PKR {current_balance:,.2f}")
 
-            if submit:
-                missing_fields = []
-                if not bill_no.strip():
-                    missing_fields.append("Bill / Voucher Number")
-                if not purpose.strip():
-                    missing_fields.append("Purpose / Description")
+            # Get pre-filled values
+            def_bill_no = st.session_state.get("exp_bill_no", "")
+            def_purpose = st.session_state.get("exp_purpose", "")
+            def_amount = float(st.session_state.get("exp_amount", 1.0))
+            form_ver = st.session_state.get("exp_form_ver", 0)
 
-                if missing_fields:
-                    st.error(f"Please fill in the missing required field(s): {', '.join(missing_fields)}")
-                else:
-                    saved_file_path = None
+            with st.form(f"expenditure_form_v{form_ver}", clear_on_submit=False):
+                bill_no = st.text_input("Bill / Voucher Number", value=def_bill_no)
+                purpose = st.text_area("Purpose / Description", value=def_purpose)
+                amount = st.number_input(
+                    "Amount (PKR)", min_value=1.0, value=max(1.0, def_amount), step=500.0
+                )
+                exp_date = st.date_input("Expenditure Date")
 
-                    # Handle File Saving locally
-                    if uploaded_file is not None:
-                        ext = uploaded_file.name.split(".")[-1]
-                        clean_bill_no = "".join(
-                            c for c in bill_no if c.isalnum() or c in ("_", "-")
-                        )
-                        filename = f"bill_{clean_bill_no}_{uploaded_file.name}"
-                        saved_file_path = os.path.join(UPLOAD_DIR, filename)
+                uploaded_file = st.file_uploader(
+                    "Attach Invoice / Receipt (PDF, PNG, JPG)",
+                    type=["pdf", "png", "jpg", "jpeg"],
+                )
 
-                        with open(saved_file_path, "wb") as f:
-                            f.write(uploaded_file.getbuffer())
+                submit = st.form_submit_button("Record Expenditure")
 
-                    # Save DB entry
-                    new_exp = Expenditure(
-                        section_id=sec_id,
-                        budget_head_id=head_id,
-                        amount=amount,
-                        purpose=purpose.strip(),
-                        bill_no=bill_no.strip(),
-                        expenditure_date=exp_date,
-                        invoice_path=saved_file_path,
-                        ddo_status="PENDING"
-                    )
-                    db.add(new_exp)
+                if submit:
+                    missing_fields = []
+                    if not bill_no.strip():
+                        missing_fields.append("Bill / Voucher Number")
+                    if not purpose.strip():
+                        missing_fields.append("Purpose / Description")
 
-                    # If converted from Work Order, update Work Order status
-                    converting_wo_id = st.session_state.get("active_convert_wo_id")
+                    # Account for WO committed amount if converting
+                    wo_committed_offset = 0.0
                     if converting_wo_id:
                         wo_obj = db.query(WorkOrder).filter(WorkOrder.id == converting_wo_id).first()
                         if wo_obj:
-                            wo_obj.status = "Converted"
+                            wo_committed_offset = wo_obj.amount
+
+                    max_allowed = current_balance + wo_committed_offset
+
+                    if missing_fields:
+                        st.error(f"Please fill in the missing required field(s): {', '.join(missing_fields)}")
+                    elif amount > max_allowed:
+                        st.error(f"⚠️ Cannot record expenditure of PKR {amount:,.2f}. It exceeds the available net balance of PKR {max_allowed:,.2f}.")
+                    else:
+                        saved_file_path = None
+
+                        if uploaded_file is not None:
+                            ext = uploaded_file.name.split(".")[-1]
+                            clean_bill_no = "".join(
+                                c for c in bill_no if c.isalnum() or c in ("_", "-")
+                            )
+                            filename = f"bill_{clean_bill_no}_{uploaded_file.name}"
+                            saved_file_path = os.path.join(UPLOAD_DIR, filename)
+
+                            with open(saved_file_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
+
+                        # Save DB entry with work_order_id link
+                        new_exp = Expenditure(
+                            section_id=sec_id,
+                            budget_head_id=head_id,
+                            amount=amount,
+                            purpose=purpose.strip(),
+                            bill_no=bill_no.strip(),
+                            expenditure_date=exp_date,
+                            invoice_path=saved_file_path,
+                            ddo_status="PENDING",
+                            work_order_id=converting_wo_id
+                        )
+                        db.add(new_exp)
+
+                        # Mark Work Order as Converted
+                        if converting_wo_id:
+                            wo_obj = db.query(WorkOrder).filter(WorkOrder.id == converting_wo_id).first()
+                            if wo_obj:
+                                wo_obj.status = "Converted"
+
+                        db.commit()
+
+                        # Reset form session state keys cleanly
                         st.session_state.pop("active_convert_wo_id", None)
+                        st.session_state.pop("exp_sec_id", None)
+                        st.session_state.pop("exp_head_id", None)
+                        st.session_state["exp_bill_no"] = ""
+                        st.session_state["exp_purpose"] = ""
+                        st.session_state["exp_amount"] = 1.0
+                        st.session_state["exp_form_ver"] = form_ver + 1
 
-                    db.commit()
-
-                    # Reset pre-filled session state values safely
-                    st.session_state["exp_bill_no"] = ""
-                    st.session_state["exp_purpose"] = ""
-                    st.session_state["exp_amount"] = 1.0
-
-                    st.success(
-                        f"Successfully recorded PKR {amount:,.2f} against Bill #{bill_no}!"
-                    )
-                    st.rerun()
+                        st.success(
+                            f"Successfully recorded PKR {amount:,.2f} against Bill #{bill_no}!"
+                        )
+                        st.rerun()
 
     # Table displaying expenditure logs with invoice download options
     with col2:

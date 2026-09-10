@@ -109,13 +109,13 @@ def render_ddo_module(db):
             badge = "🟢 AUTHORISED" if st_val == "AUTHORISED" else ("🔵 IN PROGRESS" if st_val in ("IN PROGRESS", "IN_PROGRESS") else ("🟡 OBJECTION" if st_val == "OBJECTION" else ("🔴 REJECTED" if st_val == "REJECTED" else "⏳ PENDING")))
             log_data.append({
                 "Bill No": e.bill_no,
-                "Date": e.expenditure_date,
+                "Date": str(e.expenditure_date),
                 "Section": e.section.name if e.section else "N/A",
                 "Head Code": e.budget_head.code if e.budget_head else "N/A",
                 "Amount (PKR)": f"{e.amount:,.2f}",
                 "DDO Status": badge,
                 "Remarks": e.ddo_remarks or "-",
-                "Action Date": e.ddo_action_date or "-"
+                "Action Date": str(e.ddo_action_date) if e.ddo_action_date else "-"
             })
         df_log = pd.DataFrame(log_data)
         st.dataframe(df_log, use_container_width=True)

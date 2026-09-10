@@ -2,7 +2,8 @@ from datetime import datetime
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from models import BudgetHead, Expenditure, FundRelease, Section, User
+from sqlalchemy import func
+from models import BudgetHead, Expenditure, FundRelease, Section, User, Reappropriation, WorkOrder, BaseAllocationLog
 
 
 def get_greeting():
@@ -229,16 +230,57 @@ def render_secretary_dashboard(db):
         all_expenditures = [e for e in all_expenditures if e.budget_head and getattr(e.budget_head, "category", "ERE") == selected_cat]
 
     # Metrics calculation
+    log_base_sum = db.query(func.coalesce(func.sum(BaseAllocationLog.amount), 0.0)).scalar() or 0.0
+    head_base_sum = db.query(func.coalesce(func.sum(BudgetHead.base_allocation), 0.0)).scalar() or 0.0
+    total_base_pool = log_base_sum + head_base_sum
+
     total_released = sum(r.amount for r in all_releases)
+    unreleased_base_pool = max(0.0, total_base_pool - total_released)
+
+    re_in_query = db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0)).filter(Reappropriation.reap_type == "IN")
+    re_out_query = db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0)).filter(Reappropriation.reap_type == "OUT")
+    wo_query = db.query(func.coalesce(func.sum(WorkOrder.amount), 0.0)).filter(WorkOrder.status == "Pending Expenditure")
+
+    if selected_sec_id:
+        wo_query = wo_query.filter(WorkOrder.section_id == selected_sec_id)
+    if selected_head_id:
+        re_in_query = re_in_query.filter(Reappropriation.target_head_id == selected_head_id)
+        re_out_query = re_out_query.filter(Reappropriation.source_head_id == selected_head_id)
+        wo_query = wo_query.filter(WorkOrder.budget_head_id == selected_head_id)
+
+    total_re_in = re_in_query.scalar() or 0.0
+    total_re_out = re_out_query.scalar() or 0.0
     total_spent = sum(e.amount for e in all_expenditures)
-    remaining_balance = total_released - total_spent
-    utilization_pct = (total_spent / total_released * 100) if total_released > 0 else 0.0
+    total_wo = wo_query.scalar() or 0.0
+
+    net_available_pool = total_released + total_re_in - total_re_out
+    net_bal_after_exp = net_available_pool - total_spent
+    net_bal_after_wo = net_bal_after_exp - total_wo
+
+    utilization_pct = (total_spent / net_available_pool * 100) if net_available_pool > 0 else 0.0
 
     # ERE vs NON-ERE Spending breakdown
     ere_spent = sum(e.amount for e in all_expenditures if e.budget_head and getattr(e.budget_head, "category", "ERE") == "ERE")
     non_ere_spent = sum(e.amount for e in all_expenditures if e.budget_head and getattr(e.budget_head, "category", "ERE") == "NON-ERE")
 
-    # --- 5. WELLS FARGO EXECUTIVE STYLE TOP CARD & TREND GRAPH ---
+    # --- 5. TOP EXECUTIVE STATS CARDS BAR ---
+    r1_c1, r1_c2, r1_c3, r1_c4 = st.columns(4)
+    r1_c1.metric("Base Allocation", f"PKR {total_base_pool:,.2f}")
+    r1_c2.metric("Unreleased Base Pool", f"PKR {unreleased_base_pool:,.2f}")
+    r1_c3.metric("Total Released", f"PKR {total_released:,.2f}")
+    r1_c4.metric("Re+ (Added)", f"PKR {total_re_in:,.2f}")
+
+    r2_c1, r2_c2, r2_c3, r2_c4 = st.columns(4)
+    r2_c1.metric("Re- (Surrendered)", f"PKR {total_re_out:,.2f}")
+    r2_c2.metric("Total Spent", f"PKR {total_spent:,.2f}")
+    r2_c3.metric("Net Bal (After W/O)", f"PKR {net_bal_after_wo:,.2f}", delta=f"{utilization_pct:.1f}% Used")
+    r2_c4.metric("Net Bal (After Exp)", f"PKR {net_bal_after_exp:,.2f}")
+
+    st.markdown("---")
+
+    # --- 6. WELLS FARGO EXECUTIVE STYLE PORTFOLIO & TREND GRAPH ---
+    st.markdown('<div class="sec-section-heading">Executive Portfolio & Expenditure Trend</div>', unsafe_allow_html=True)
+
     st.markdown(f"""
         <div class="wf-hero-card">
             <div class="wf-account-badge">NH&CD Finance &bull; Executive Portfolio</div>
@@ -263,12 +305,10 @@ def render_secretary_dashboard(db):
             "Amount": e.amount
         } for e in all_expenditures])
         df_trend["Date"] = pd.to_datetime(df_trend["Date"])
-        # Aggregate multiple expenditures on the same date to prevent looping distortion
         df_trend = df_trend.groupby("Date")["Amount"].sum().reset_index()
         df_trend = df_trend.sort_values("Date")
         df_trend["Cumulative Spent"] = df_trend["Amount"].cumsum()
 
-        # Apply Time Horizon filtering
         if time_horizon != "All Time" and not df_trend.empty:
             max_date = df_trend["Date"].max()
             if time_horizon == "1M":
@@ -307,16 +347,6 @@ def render_secretary_dashboard(db):
             height=250
         )
         st.plotly_chart(fig_trend, use_container_width=True)
-
-    st.markdown("---")
-
-    # --- 6. HIGH-LEVEL EXECUTIVE METRICS ---
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Total Released", f"PKR {total_released:,.2f}")
-    m2.metric("Total Spent", f"PKR {total_spent:,.2f}")
-    m3.metric("ERE Spent", f"PKR {ere_spent:,.2f}")
-    m4.metric("NON-ERE Spent", f"PKR {non_ere_spent:,.2f}")
-    m5.metric("Utilization Rate", f"{utilization_pct:.1f}%")
 
     st.markdown("---")
 
@@ -411,15 +441,21 @@ def render_secretary_dashboard(db):
         if selected_cat != "All Categories" and h_cat != selected_cat:
             continue
 
-        h_base = getattr(h, "base_allocation", 0.0)
+        h_log = db.query(func.coalesce(func.sum(BaseAllocationLog.amount), 0.0)).filter(BaseAllocationLog.budget_head_id == h.id).scalar() or 0.0
+        h_col = (getattr(h, "base_allocation", 0.0) or 0.0)
+        h_base = h_log + h_col
         h_rel = sum(r.amount for r in all_releases if r.budget_head_id == h.id)
         
         # Re+ and Re- calculations
-        re_in = db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0)).filter(Reappropriation.target_head_id == h.id, Reappropriation.reap_type == "IN").scalar()
-        re_out = db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0)).filter(Reappropriation.source_head_id == h.id, Reappropriation.reap_type == "OUT").scalar()
+        re_in = db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0)).filter(Reappropriation.target_head_id == h.id, Reappropriation.reap_type == "IN").scalar() or 0.0
+        re_out = db.query(func.coalesce(func.sum(Reappropriation.amount), 0.0)).filter(Reappropriation.source_head_id == h.id, Reappropriation.reap_type == "OUT").scalar() or 0.0
 
         h_exp = sum(e.amount for e in all_expenditures if e.budget_head_id == h.id)
-        wo_amt = db.query(func.coalesce(func.sum(WorkOrder.amount), 0.0)).filter(WorkOrder.budget_head_id == h.id, WorkOrder.status == "Pending Expenditure").scalar()
+        
+        wo_query = db.query(func.coalesce(func.sum(WorkOrder.amount), 0.0)).filter(WorkOrder.budget_head_id == h.id, WorkOrder.status == "Pending Expenditure")
+        if selected_sec_id:
+            wo_query = wo_query.filter(WorkOrder.section_id == selected_sec_id)
+        wo_amt = wo_query.scalar() or 0.0
 
         net_pool = (h_rel + re_in - re_out)
         net_bal_after_exp = net_pool - h_exp

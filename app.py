@@ -1,4 +1,40 @@
 import importlib
+import streamlit as st
+
+# --- DEPENDENCY CHECKER ---
+REQUIRED_PACKAGES = [
+    ("streamlit", "streamlit"),
+    ("sqlalchemy", "sqlalchemy"),
+    ("pandas", "pandas"),
+    ("plotly", "plotly"),
+    ("openpyxl", "openpyxl"),
+    ("bcrypt", "bcrypt"),
+    ("pyarrow", "pyarrow"),
+]
+
+missing_pkgs = []
+for pkg_import, pkg_name in REQUIRED_PACKAGES:
+    try:
+        importlib.import_module(pkg_import)
+    except ImportError:
+        missing_pkgs.append(pkg_name)
+
+if missing_pkgs:
+    st.set_page_config(page_title="NH&CD Finance Portal - Missing Libraries", page_icon="⚠️", layout="wide")
+    st.error("⚠️ **Missing Required Python Libraries Detected!**")
+    st.warning("The following required package(s) are missing on your system:\n\n" + "\n".join([f"- `{p}`" for p in missing_pkgs]))
+    st.info("""
+        ### 🛠️ How to Fix:
+        Please open your terminal or command prompt in the project root directory and run:
+
+        ```bash
+        pip install -r requirements.txt
+        ```
+
+        After installation completes, refresh this page or restart the application.
+    """)
+    st.stop()
+
 import secretary_views
 import reports_views
 import ddo_views
@@ -17,7 +53,6 @@ from finance_views import render_budget_heads_management, render_fund_release
 from ddo_views import render_ddo_module
 from reappropriation_views import render_reappropriation_module
 from work_order_views import render_work_orders_module
-import streamlit as st
 from models import init_db
 
 importlib.reload(secretary_views)
@@ -82,6 +117,7 @@ def main_portal():
     if st.session_state["role"] == "Finance":
         menu = [
             "Dashboard",
+            "Base Allocation",
             "Fund Release",
             "Reappropriation",
             "Work Orders",
@@ -115,6 +151,9 @@ def main_portal():
 
     elif choice == "DDO Scrutiny":
         render_ddo_module(db)
+
+    elif choice == "Base Allocation":
+        finance_views.render_base_allocation_module(db)
 
     elif choice == "Reappropriation":
         render_reappropriation_module(db)

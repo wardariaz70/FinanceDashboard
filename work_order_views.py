@@ -4,6 +4,9 @@ import streamlit as st
 from models import BudgetHead, Section, WorkOrder, User
 
 
+from expenditure_views import get_budget_head_balance
+
+
 def render_work_orders_module(db):
     st.title("📋 Work Orders & Committed Future Expenses")
     st.caption("Record Sanctioned Work Orders Before Final Expenditure Voucher Generation")
@@ -44,15 +47,19 @@ def render_work_orders_module(db):
             h for h in budget_heads 
             if not h.sections or any(s.id == selected_sec_id for s in h.sections)
         ]
-        head_map = {f"{h.code} - {h.description}": h.id for h in available_heads}
 
-        if available_heads:
+        if not available_heads:
+            st.warning("No budget heads assigned to selected section.")
+        else:
+            head_map = {f"{h.code} - {h.description}": h.id for h in available_heads}
+
             def_order_no = st.session_state.get("wo_order_no", "")
             def_vendor = st.session_state.get("wo_vendor", "")
             def_amount = float(st.session_state.get("wo_amount", 1.0))
             def_desc = st.session_state.get("wo_description", "")
+            form_ver = st.session_state.get("wo_form_ver", 0)
 
-            with st.form("create_work_order_form", clear_on_submit=False):
+            with st.form(f"create_work_order_form_v{form_ver}", clear_on_submit=False):
                 head_label = st.selectbox("Budget Head", list(head_map.keys()))
                 order_no = st.text_input("Work Order No (e.g., WO-2026-88)", value=def_order_no)
                 vendor_name = st.text_input("Vendor / Contractor Name", value=def_vendor)
@@ -62,6 +69,9 @@ def render_work_orders_module(db):
                 submit_wo = st.form_submit_button("Submit Work Order")
 
                 if submit_wo:
+                    head_id = head_map[head_label]
+                    curr_bal = get_budget_head_balance(db, head_id)
+
                     missing = []
                     if not order_no.strip():
                         missing.append("Work Order No")
@@ -72,8 +82,9 @@ def render_work_orders_module(db):
 
                     if missing:
                         st.error(f"Please fill in the missing required field(s): {', '.join(missing)}")
+                    elif amount > curr_bal:
+                        st.error(f"⚠️ Cannot commit Work Order of PKR {amount:,.2f}. It exceeds the available net balance of PKR {curr_bal:,.2f}.")
                     else:
-                        head_id = head_map[head_label]
                         wo = WorkOrder(
                             section_id=selected_sec_id,
                             budget_head_id=head_id,
@@ -93,11 +104,10 @@ def render_work_orders_module(db):
                         st.session_state["wo_vendor"] = ""
                         st.session_state["wo_amount"] = 1.0
                         st.session_state["wo_description"] = ""
+                        st.session_state["wo_form_ver"] = form_ver + 1
 
                         st.success(f"Work Order '{order_no.strip()}' submitted and committed successfully!")
                         st.rerun()
-        else:
-            st.warning("No budget heads assigned to selected section.")
 
     with col_table:
         st.markdown("##### Work Orders Log History")

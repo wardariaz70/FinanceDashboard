@@ -99,8 +99,12 @@ class Expenditure(Base):
     ddo_remarks = Column(String(255), nullable=True)
     ddo_action_date = Column(Date, nullable=True)
 
+    # Source Work Order Linkage (if converted)
+    work_order_id = Column(Integer, ForeignKey("work_orders.id"), nullable=True)
+
     section = relationship("Section", back_populates="expenditures")
     budget_head = relationship("BudgetHead", back_populates="expenditures")
+    work_order = relationship("WorkOrder")
 
 
 # 6. Reappropriation Table (Re+ / Re-)
